@@ -13,7 +13,7 @@ import { getOperationAST } from 'graphql/utilities/getOperationAST';
 import $$observable from 'symbol-observable';
 
 import { GRAPHQL_WS } from './protocol';
-import { WS_TIMEOUT } from './defaults';
+import { MIN_WS_TIMEOUT, WS_TIMEOUT } from './defaults';
 import MessageTypes from './message-types';
 
 export interface Observer<T> {
@@ -60,12 +60,14 @@ export type ConnectionParamsOptions = ConnectionParams | Function | Promise<Conn
 
 export interface ClientOptions {
   connectionParams?: ConnectionParamsOptions;
+  minTimeout?: number;
   timeout?: number;
   reconnect?: boolean;
   reconnectionAttempts?: number;
   connectionCallback?: (error: Error[], result?: any) => void;
   lazy?: boolean;
   inactivityTimeout?: number;
+  wsOptionArguments?: any[];
 }
 
 export class SubscriptionClient {
@@ -74,6 +76,7 @@ export class SubscriptionClient {
   private url: string;
   private nextOperationId: number;
   private connectionParams: Function;
+  private minWsTimeout: number;
   private wsTimeout: number;
   private unsentMessagesQueue: Array<any>; // queued messages while websocket is opening.
   private reconnect: boolean;
@@ -94,6 +97,7 @@ export class SubscriptionClient {
   private maxConnectTimeoutId: any;
   private middlewares: Middleware[];
   private maxConnectTimeGenerator: any;
+  private wsOptionArguments: any[];
 
   constructor(
     url: string,
@@ -104,11 +108,13 @@ export class SubscriptionClient {
     const {
       connectionCallback = undefined,
       connectionParams = {},
+      minTimeout = MIN_WS_TIMEOUT,
       timeout = WS_TIMEOUT,
       reconnect = false,
       reconnectionAttempts = Infinity,
       lazy = false,
       inactivityTimeout = 0,
+      wsOptionArguments = [],
     } = (options || {});
 
     this.wsImpl = webSocketImpl || NativeWebSocket;
@@ -121,6 +127,7 @@ export class SubscriptionClient {
     this.url = url;
     this.operations = {};
     this.nextOperationId = 0;
+    this.minWsTimeout = minTimeout;
     this.wsTimeout = timeout;
     this.unsentMessagesQueue = [];
     this.reconnect = reconnect;
@@ -135,6 +142,7 @@ export class SubscriptionClient {
     this.client = null;
     this.maxConnectTimeGenerator = this.createMaxConnectTimeGenerator();
     this.connectionParams = this.getConnectionParams(connectionParams);
+    this.wsOptionArguments = wsOptionArguments;
 
     if (!this.lazy) {
       this.connect();
@@ -163,6 +171,10 @@ export class SubscriptionClient {
       }
 
       this.client.close();
+      this.client.onopen = null;
+      this.client.onclose = null;
+      this.client.onerror = null;
+      this.client.onmessage = null;
       this.client = null;
       this.eventEmitter.emit('disconnected');
 
@@ -349,7 +361,7 @@ export class SubscriptionClient {
   }
 
   private createMaxConnectTimeGenerator() {
-    const minValue = 1000;
+    const minValue = this.minWsTimeout;
     const maxValue = this.wsTimeout;
 
     return new Backoff({
@@ -542,7 +554,7 @@ export class SubscriptionClient {
   }
 
   private connect() {
-    this.client = new this.wsImpl(this.url, this.wsProtocols);
+    this.client = new this.wsImpl(this.url, this.wsProtocols, ...this.wsOptionArguments);
 
     this.checkMaxConnectTimeout();
 
@@ -615,7 +627,7 @@ export class SubscriptionClient {
         break;
 
       case MessageTypes.GQL_CONNECTION_ACK:
-        this.eventEmitter.emit(this.reconnecting ? 'reconnected' : 'connected');
+        this.eventEmitter.emit(this.reconnecting ? 'reconnected' : 'connected', parsedMessage.payload);
         this.reconnecting = false;
         this.backoff.reset();
         this.maxConnectTimeGenerator.reset();
@@ -626,8 +638,9 @@ export class SubscriptionClient {
         break;
 
       case MessageTypes.GQL_COMPLETE:
-        this.operations[opId].handler(null, null);
+        const handler = this.operations[opId].handler;
         delete this.operations[opId];
+        handler.call(this, null, null);
         break;
 
       case MessageTypes.GQL_ERROR:

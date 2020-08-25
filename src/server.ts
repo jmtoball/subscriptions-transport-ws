@@ -329,7 +329,7 @@ export class SubscriptionServer {
               promisedParams = Promise.resolve(this.onOperation(messageForCallback, baseParams, connectionContext.socket));
             }
 
-            promisedParams.then((params) => {
+            return promisedParams.then((params) => {
               if (typeof params !== 'object') {
                 const error = `Invalid params returned from onOperation! return values must be an object!`;
                 this.sendError(connectionContext, opId, { message: error });
@@ -379,7 +379,7 @@ export class SubscriptionServer {
                     try {
                       result = params.formatResponse(value, params);
                     } catch (err) {
-                      console.error('Error in formatError function:', err);
+                      console.error('Error in formatResponse function:', err);
                     }
                   }
 
@@ -400,8 +400,8 @@ export class SubscriptionServer {
                   }
 
                   // plain Error object cannot be JSON stringified.
-                  if (Object.keys(e).length === 0) {
-                    error = { name: e.name, message: e.message };
+                  if (Object.keys(error).length === 0) {
+                    error = { name: error.name, message: error.message };
                   }
 
                   this.sendError(connectionContext, opId, error);
@@ -425,7 +425,6 @@ export class SubscriptionServer {
               this.unsubscribe(connectionContext, opId);
               return;
             });
-            return promisedParams;
           }).catch((error) => {
             // Handle initPromise rejected
             this.sendError(connectionContext, opId, { message: error.message });
